@@ -1,9 +1,7 @@
 module Snake
 where
 
-import qualified UI.HSCurses.Curses as HC
-import System.IO
-import Control.Concurrent(threadDelay)
+import UI.NCurses as NC
 
 data Direction = LEFT | RIGHT | UP | DOWN deriving (Eq, Show)
 data Point = Point Int Int deriving (Eq, Show)
@@ -17,12 +15,13 @@ data Snake = Snake {
 } deriving (Show)
 
 class Drawable a where
-    draw :: a -> IO ()
+    draw :: a -> NC.Update ()
 
-putPoint x y c = HC.mvWAddStr HC.stdScr x y c
+putPoint :: Integer -> Integer -> String -> NC.Update ()
+putPoint x y str = NC.moveCursor x y >> NC.drawString str
 
 instance Drawable Point where
-    draw (Point x y) = putPoint x y $ ['*']
+    draw (Point x y) = putPoint (toInteger x) (toInteger y) $ "*"
 
 instance Drawable Board where
     draw (Board w h) = do
@@ -36,13 +35,13 @@ instance Drawable Snake where
     draw (Snake _ points) = mapM_ draw points
 
 advance :: Direction -> Snake -> Snake
-advance direction s@(Snake origDir points) 
-    | isAllow direction origDir = case direction of
+advance dir s@(Snake origDir points) 
+    | isAllow dir origDir = case dir of
         UP -> Snake UP $ (Point (hx-1) hy):(init points)
         DOWN -> Snake DOWN $ (Point (hx+1) hy):(init points)
         LEFT -> Snake LEFT $ (Point hx (hy-1)):(init points)
         RIGHT -> Snake RIGHT $ (Point hx (hy+1)):(init points)
-    | otherwise = advance direction s
+    | otherwise = advance dir s
     where 
         (Point hx hy) = head points
         isAllow UP DOWN = False
@@ -58,26 +57,36 @@ data Game = Game {
 
 instance Drawable Game where
     draw game = do
-        HC.wclear HC.stdScr
+        -- clear manually
+        mapM_ (\(x, y) -> putPoint (toInteger x) (toInteger y) " ") $ allPoints
         draw $ snake game
         draw $ board game
-        HC.refresh
+        where 
+            w = width $ board game
+            h = height $ board game
+            allPoints = [(x, y) | x <- [0..w-1], y <- [0..h-1]]
+
+getCommand :: NC.Window -> NC.Curses (Maybe Direction)
+getCommand w = do
+    event <- NC.getEvent w $ Just 200
+    return $ case event of
+        (Just (EventSpecialKey KeyUpArrow)) -> Just UP
+        (Just (EventSpecialKey KeyDownArrow)) -> Just DOWN
+        (Just (EventSpecialKey KeyLeftArrow)) -> Just LEFT
+        (Just (EventSpecialKey KeyRightArrow)) -> Just RIGHT
+        _ -> Nothing
 
 gameLoop :: Game -> IO ()
 gameLoop game = do
-    draw game
-    threadDelay 200000
-    gameLoop game {snake = advance RIGHT $ snake game}
+    command <- NC.runCurses $ do 
+        w <- NC.defaultWindow
+        NC.updateWindow w $ do
+            draw game
+        NC.render
+        getCommand w
 
-main :: IO ()
-main = do 
-    hSetBuffering stdin NoBuffering
-    HC.initCurses
-    _ <- HC.leaveOk True
-    HC.echo False
-    let game = Game {
-        snake = Snake RIGHT [Point 3 5, Point 3 4, Point 3 3, Point 3 2],
-        board = Board 30 30 
-    }
-    gameLoop game
-    HC.endWin
+    case command of
+        Just dir -> gameLoop game {snake = advance dir $ snake game}
+        Nothing -> gameLoop game {snake = advance origDir $ snake game}
+
+    where origDir = direction $ snake game

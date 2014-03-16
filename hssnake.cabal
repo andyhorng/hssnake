@@ -15,7 +15,7 @@ build-type:          Simple
 cabal-version:       >=1.8
 
 executable hssnake
-  main-is:           Snake.hs
+  main-is:           Main.hs
   -- other-modules:       
   build-depends:       base ==4.6.*,
                        ncurses == 0.2.7
