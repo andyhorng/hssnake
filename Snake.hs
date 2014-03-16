@@ -2,7 +2,6 @@ module Snake
 where
 
 import qualified UI.HSCurses.Curses as HC
-import Control.Monad.State
 import System.IO
 import Control.Concurrent(threadDelay)
 
@@ -57,37 +56,18 @@ data Game = Game {
     board :: Board
 }
 
-data Screen = Screen {
-    sSnake :: Snake,
-    sBoard :: Board
-} deriving (Show)
-
-instance Drawable Screen where
+instance Drawable Game where
     draw game = do
-        draw $ sBoard game
-        draw $ sSnake game
+        HC.wclear HC.stdScr
+        draw $ snake game
+        draw $ board game
         HC.refresh
-
-type GameState = State Game
-
-getNextGameState :: GameState Screen
-getNextGameState = do
-    game <- get
-    let game' = Game {snake = advance RIGHT $ snake game, board = board game}
-    put game'
-    return Screen {
-        sSnake = snake game',
-        sBoard = board game'
-    }
 
 gameLoop :: Game -> IO ()
 gameLoop game = do
-    let (screen, game') = runState getNextGameState game
-    HC.wclear HC.stdScr
-    draw screen
-    HC.wAddStr HC.stdScr $ show $ sSnake screen
+    draw game
     threadDelay 200000
-    gameLoop game'
+    gameLoop game {snake = advance RIGHT $ snake game}
 
 main :: IO ()
 main = do 
