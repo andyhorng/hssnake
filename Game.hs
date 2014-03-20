@@ -8,11 +8,14 @@ import Data.List
 
 data Status = Lose | Running deriving (Show, Eq)
 
+type Score = Int
+
 data Game = Game {
     snake :: Snake,
     board :: Board,
     status :: Status,
-    fruit :: Fruit
+    fruit :: Fruit,
+    score :: Score
 }
 
 instance Drawable Game where
@@ -21,16 +24,27 @@ instance Drawable Game where
         mapM_ (\(Point x y) -> putPoint (toInteger x) (toInteger y) " ") $ getIdlePoints game
         draw $ snake game
         draw $ board game
-        draw $ fruit game
+        let (Point fx fy) = fruit game
+        putPoint (toInteger fx) (toInteger fy) "."
+
+        let (Board w h) = board game
+        putPoint (toInteger (h `div` 2)) (toInteger (w+1)) $ "Score: " ++ (show . score) game
 
 getIdlePoints:: Game -> [Point]
 getIdlePoints game = 
     let 
-        b@(Board w h) = board game
-        s = snake game
+        (Board w h) = board game
         allPoints = [Point x y | x <- [0..w-1], y <- [0..h-1]]
     in
-        allPoints \\ (getBoardPoints b ++ body s ++ [fruit game])
+        nub (allPoints \\ getWorkingPoints game)
+
+getWorkingPoints :: Game -> [Point]
+getWorkingPoints game = 
+    let
+        b = board game
+        s = snake game
+    in
+        nub $ getBoardPoints b ++ body s ++ [fruit game]
 
 genFruit :: Game -> IO (Fruit)
 genFruit game = randomRIO (0, length idles - 1) >>= return . (idles !!)
@@ -39,9 +53,18 @@ genFruit game = randomRIO (0, length idles - 1) >>= return . (idles !!)
 hitFruit :: Game -> Bool
 hitFruit (Game {fruit = f, snake = s}) = f == (head $ body s)
 
+collide :: Game -> Bool
+collide game = 
+    let 
+        shead = head $ body $ snake game
+        collideBody = shead `elem` (tail $ body $ snake game)
+        collideBoard = shead `elem` (getBoardPoints $ board game)
+    in
+        or [collideBody, collideBoard]
+
 getCommand :: NC.Window -> NC.Curses (Maybe Direction)
 getCommand w = do
-    event <- NC.getEvent w $ Just 200
+    event <- NC.getEvent w $ Just 500
     return $ case event of
         (Just (EventSpecialKey KeyUpArrow)) -> Just UP
         (Just (EventSpecialKey KeyDownArrow)) -> Just DOWN
@@ -52,24 +75,22 @@ getCommand w = do
 initGame :: IO Game 
 initGame = do 
     let game = Game {
-        snake = Snake RIGHT [Point 3 5],
-        board = Board 30 30 ,
+        snake = Snake RIGHT [Point 2 2],
+        board = Board 30 30,
         status = Running,
-        fruit = Point 0 0
+        fruit = Point 0 0,
+        score = 0
     }
     f <- genFruit game
     return game {fruit = f}
 
 gameLoop :: Game -> IO ()
-gameLoop game@(Game {status = Running}) = 
-    if hitFruit game then do
-        newFruit <- genFruit game
-        let game' = game {
-            snake = eatFruit (fruit game) (snake game),
-            fruit = newFruit
-        }
-        gameLoop game'
-    else do 
+gameLoop game@(Game {status = Running}) 
+
+    | collide game = do
+        gameLoop (game {status = Lose})
+
+    | otherwise = do
         command <- NC.runCurses $ do 
             w <- NC.defaultWindow
             NC.updateWindow w $ do
@@ -77,12 +98,25 @@ gameLoop game@(Game {status = Running}) =
             NC.render
             getCommand w
 
-        case command of
-            Just dir -> gameLoop game {snake = advance dir $ snake game}
-            Nothing -> gameLoop game {snake = advance origDir $ snake game}
+        let 
+            newDir = case command of
+                    Just dir -> dir
+                    Nothing -> direction $ snake game
+            newSnake = advance newDir $ snake game
+            newGame = game {snake = newSnake}
 
-    where 
-        origDir = direction $ snake game
+        if hitFruit newGame
+            then  do
+                newFruit <- genFruit game
+                let snake' = (eatFruit (fruit game) (snake game)) {direction = newDir}
+                gameLoop game {
+                    snake = snake',
+                    fruit = newFruit, 
+                    score = (score game) + 1
+                }
+            else 
+                gameLoop newGame
 
 -- Lose
-gameLoop (Game {status = Lose}) = return ()
+gameLoop game@(Game {status = Lose}) = 
+    putStrLn $ "Your Score: " ++ (show $ score game)
