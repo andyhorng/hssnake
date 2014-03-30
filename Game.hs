@@ -3,8 +3,8 @@ module Game where
 
 import Snake
 import System.Random
-import UI.NCurses as NC
-import Data.List
+import Graphics.UI.GLUT hiding (Point)
+import Data.IORef
 
 data Status = Lose | Running deriving (Show, Eq)
 
@@ -16,107 +16,86 @@ data Game = Game {
     status :: Status,
     fruit :: Fruit,
     score :: Score
-}
-
-instance Drawable Game where
-    draw game = do
-        -- clear manually
-        mapM_ (\(Point x y) -> putPoint (toInteger x) (toInteger y) " ") $ getIdlePoints game
-        draw $ snake game
-        draw $ board game
-        let (Point fx fy) = fruit game
-        putPoint (toInteger fx) (toInteger fy) "."
-
-        let (Board w h) = board game
-        putPoint (toInteger (h `div` 2)) (toInteger (w+1)) $ "Score: " ++ (show . score) game
-
-getIdlePoints:: Game -> [Point]
-getIdlePoints game = 
-    let 
-        (Board w h) = board game
-        allPoints = [Point x y | x <- [0..w-1], y <- [0..h-1]]
-    in
-        nub (allPoints \\ getWorkingPoints game)
-
-getWorkingPoints :: Game -> [Point]
-getWorkingPoints game = 
-    let
-        b = board game
-        s = snake game
-    in
-        nub $ getBoardPoints b ++ body s ++ [fruit game]
+} deriving (Show)
 
 genFruit :: Game -> IO (Fruit)
-genFruit game = randomRIO (0, length idles - 1) >>= return . (idles !!)
-    where idles = getIdlePoints game
+genFruit game = do
+    let w = (width $ board game) `div` 2
+        h = (height $ board game) `div` 2
+    ranX <- randomRIO (-w, w)
+    ranY <- randomRIO (-h, h)
+    let newFruit = Point ranX ranY
+    if newFruit `elem` (body $ snake game) 
+        then genFruit game 
+        else return newFruit
 
-hitFruit :: Game -> Bool
-hitFruit (Game {fruit = f, snake = s}) = f == (head $ body s)
+isGotFruit :: Game -> Bool
+isGotFruit (Game {fruit = f, snake = s}) = f == (head $ body s)
 
-collide :: Game -> Bool
-collide game = 
+isDie :: Game -> Bool
+isDie game = 
     let 
         shead = head $ body $ snake game
         collideBody = shead `elem` (tail $ body $ snake game)
-        collideBoard = shead `elem` (getBoardPoints $ board game)
+        (Board w h) = board game
+        isWall (Point x y) = abs x > (w `div` 2) || abs y > (h `div` 2)
     in
-        or [collideBody, collideBoard]
+        or [collideBody, isWall shead]
 
-getCommand :: NC.Window -> NC.Curses (Maybe Direction)
-getCommand w = do
-    event <- NC.getEvent w $ Just 500
-    return $ case event of
-        (Just (EventSpecialKey KeyUpArrow)) -> Just UP
-        (Just (EventSpecialKey KeyDownArrow)) -> Just DOWN
-        (Just (EventSpecialKey KeyLeftArrow)) -> Just LEFT
-        (Just (EventSpecialKey KeyRightArrow)) -> Just RIGHT
-        _ -> Nothing
-
-initGame :: IO Game 
+initGame :: IO (IORef Game)
 initGame = do 
     let game = Game {
-        snake = Snake RIGHT [Point 2 2],
-        board = Board 30 30,
+        snake = Snake RIGHT [Point 0 0, Point (-1) 0, Point (-2) 0],
+        board = Board 20 20,
         status = Running,
         fruit = Point 0 0,
         score = 0
     }
     f <- genFruit game
-    return game {fruit = f}
+    newIORef $ game {fruit = f}
 
-gameLoop :: Game -> IO ()
-gameLoop game@(Game {status = Running}) 
+gameLoop :: IORef Game -> IO ()
+gameLoop gameRef = do
+    game <- readIORef gameRef
+    let 
+        dir = direction $ snake game
+        snake' = advance dir $ snake game
 
-    | collide game = do
-        gameLoop (game {status = Lose})
+    if (not.isDie) game {snake = snake'}
+        then do
+            let
+                f = fruit game
+                isGot = isGotFruit $ game {snake = snake'}
+                nextScore = if isGot then (+) 10 else (+) 0
+            nextFruit <- if isGot then genFruit game else return f
+            writeIORef gameRef $ if isGot
+                then game {snake = eatFruit f $ snake game, fruit = nextFruit, score = nextScore $ score game}
+                else game {snake = advance dir $ snake game, score = nextScore $ score game}
+            
+            addTimerCallback 200 $ gameLoop gameRef
+            postRedisplay Nothing
+        else return ()
 
-    | otherwise = do
-        command <- NC.runCurses $ do 
-            w <- NC.defaultWindow
-            NC.updateWindow w $ do
-                draw game
-            NC.render
-            getCommand w
+isOppsite :: Direction -> Direction -> Bool
+isOppsite dir1 dir2 = case (dir1, dir2) of
+    (LEFT, RIGHT) -> True
+    (UP, DOWN)    -> True
+    (RIGHT, LEFT) -> True
+    (DOWN, UP)    -> True
+    _             -> False
 
-        let 
-            newDir = case command of
-                    Just dir -> dir
-                    Nothing -> direction $ snake game
-            newSnake = advance newDir $ snake game
-            newGame = game {snake = newSnake}
-
-        if hitFruit newGame
-            then  do
-                newFruit <- genFruit game
-                let snake' = (eatFruit (fruit game) (snake game)) {direction = newDir}
-                gameLoop game {
-                    snake = snake',
-                    fruit = newFruit, 
-                    score = (score game) + 1
-                }
-            else 
-                gameLoop newGame
-
--- Lose
-gameLoop game@(Game {status = Lose}) = 
-    putStrLn $ "Your Score: " ++ (show $ score game)
+keyboardHandler :: IORef Game -> KeyboardMouseCallback
+keyboardHandler gameRef key keyState _ _ = do
+    case (key, keyState) of 
+        (SpecialKey KeyUp,    Down) -> updateDir UP
+        (SpecialKey KeyDown,  Down) -> updateDir DOWN
+        (SpecialKey KeyLeft,  Down) -> updateDir LEFT
+        (SpecialKey KeyRight, Down) -> updateDir RIGHT
+        _                           -> return ()
+    where
+        updateDir dir = do
+            game <- readIORef gameRef
+            let origDir = direction $ snake game
+            if isOppsite origDir dir
+                then return ()
+                else writeIORef gameRef $ game {snake = Snake dir $ body $ snake game}
