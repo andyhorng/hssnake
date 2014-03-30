@@ -19,4 +19,5 @@ executable hssnake
   -- other-modules:       
   build-depends:       base ==4.6.*,
                        ncurses == 0.2.7,
-                       random >= 1.0
+                       random >= 1.0,
+                       GLUT >= 2.4.0
